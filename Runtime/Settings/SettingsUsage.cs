@@ -5,16 +5,28 @@ namespace Hextant
     // Specifies how the settings are used and when they are available.
     public enum SettingsUsage
     {
-        // Project-wide settings available at runtime.
-        // Ex: Project Settings/Time
+        /// <summary>
+        /// Project-wide settings available at runtime.
+        /// Ex: Project Settings/Time
+        /// </summary>
         RuntimeProject,
 
-        // Project-wide settings available only in the editor.
-        // Ex: Project Settings/Version Control
+        /// <summary>
+        /// User-specific settings available at runtime.
+        /// Ex: User saves, local configs
+        /// </summary>
+        RuntimeUser,
+
+        /// <summary>
+        /// Project-wide settings available only in the editor.
+        /// Ex: Project Settings/Version Control
+        /// </summary>
         EditorProject,
 
-        // User-specific settings available only in the editor.
-        // Ex: Preferences/Scene View
+        /// <summary>
+        /// User-specific settings available only in the editor.
+        /// Ex: Preferences/Scene View
+        /// </summary>
         EditorUser
     }
 }

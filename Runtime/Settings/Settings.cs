@@ -24,11 +24,12 @@ namespace Hextant
         // The singleton instance. (Not thread safe but fine for ScriptableObjects.)
         public static T instance => _instance != null ? _instance : Initialize();
         static T _instance;
+        static bool _isDirty = false;
 
         // Loads or creates the settings instance and stores it in _instance.
         protected static T Initialize()
         {
-            // If the instance is already valid, return it. Needed if called from a 
+            // If the instance is already valid, return it. Needed if called from a
             // derived class that wishes to ensure the settings are initialized.
             if( _instance != null ) return _instance;
 
@@ -41,7 +42,14 @@ namespace Hextant
             var filename = attribute.filename ?? typeof( T ).Name;
             var path = GetSettingsPath() + filename + ".asset";
 
-            if( attribute.usage == SettingsUsage.RuntimeProject )
+            if( attribute.usage == SettingsUsage.RuntimeUser )
+            {
+                // first load the default setting, then overwrite it
+                _instance = Resources.Load<T>( filename );
+                if (!LoadSettings())
+                    SaveSettings( true );
+            }
+            else if( attribute.usage == SettingsUsage.RuntimeProject )
                 _instance = Resources.Load<T>( filename );
 #if UNITY_EDITOR
             else
@@ -95,12 +103,16 @@ namespace Hextant
         }
 
         // Returns the full asset path to the settings file.
-        static string GetSettingsPath()
+        public static string GetSettingsPath()
         {
             var path = "Assets/Settings/";
 
             switch( attribute.usage )
             {
+                case SettingsUsage.RuntimeUser:
+                    path = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments ) + '\\'
+                         + GetProjectFolderName() + '\\';
+                    break;
                 case SettingsUsage.RuntimeProject:
                     path += "Resources/"; break;
 #if UNITY_EDITOR
@@ -123,7 +135,6 @@ namespace Hextant
         // Called to validate settings changes.
         protected virtual void OnValidate() { }
 
-#if UNITY_EDITOR
         // Sets the specified setting to the desired value and marks the settings
         // so that it will be saved.
         protected void Set<S>( ref S setting, S value )
@@ -135,7 +146,13 @@ namespace Hextant
         }
 
         // Marks the settings dirty so that it will be saved.
-        protected new void SetDirty() => EditorUtility.SetDirty( this );
+        protected new void SetDirty()
+        {
+#if UNITY_EDITOR
+            EditorUtility.SetDirty( this );
+#endif
+            _isDirty = true;
+        }
 
         // The directory name of the current project folder.
         static string GetProjectFolderName()
@@ -143,7 +160,59 @@ namespace Hextant
             var path = Application.dataPath.Split( '/' );
             return path[ path.Length - 2 ];
         }
-#endif
+
+        /// <summary>
+        /// Saves the current setting to disk, only for RuntimeUser. Skips it if the setting is not dirty (not set recently)
+        /// </summary>
+        /// <param name="ignoreDirtyFlag">Set this true to ignore the dirty flag check</param>
+        public static void SaveSettings(bool ignoreDirtyFlag = false)
+        {
+            if( attribute.usage != SettingsUsage.RuntimeUser )
+            {
+                Debug.LogWarning( "Save method is only used with RuntimeUser settings" );
+                return;
+            }
+
+            if( !ignoreDirtyFlag && !_isDirty )
+            {
+                Debug.Log( "Settings are clean, no save needed" );
+                return;
+            }
+
+            if( !Directory.Exists( GetSettingsPath() ) )
+                Directory.CreateDirectory( GetSettingsPath() );
+
+            var filepath = GetSettingsPath() + ( attribute.filename ?? typeof(T).Name ) + ".json";
+            File.WriteAllText( filepath, JsonUtility.ToJson( _instance, true ) );
+            _isDirty = false;
+        }
+
+        /// <summary>
+        /// Load the current setting from disk, only for RuntimeUser
+        /// </summary>
+        /// <returns>True if load goes successfully, false if errors are present</returns>
+        public static bool LoadSettings()
+        {
+            if( attribute.usage != SettingsUsage.RuntimeUser )
+            {
+                Debug.LogWarning( "Load method is only used with RuntimeUser settings" );
+                return false;
+            }
+
+            try
+            {
+                var filepath = GetSettingsPath() + ( attribute.filename ?? typeof(T).Name ) + ".json";
+                JsonUtility.FromJsonOverwrite( File.ReadAllText( filepath ), _instance );
+            }
+            catch( Exception e )
+            {
+                Debug.LogWarning( e );
+                return false;
+            }
+
+            Debug.Log( "Successfully loaded file from disk" );
+            return true;
+        }
 
         // Base class for settings contained by a Settings<T> instance.
         [Serializable]

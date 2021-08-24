@@ -59,8 +59,13 @@ namespace Hextant
             {
                 // first load the default setting, then overwrite it
                 _instance = Resources.Load<T>( filename );
+
+                // if you're running this in editor, then ignore the disk settings
+                // this will make it easier to modify stuff in editor (without manually resetting the saved setting)
+#if !UNITY_EDITOR
                 if (!TryLoadSettings())
                     SaveSettings( ignoreDirtyFlag: true );
+#endif
             }
             else if ( attribute.usage == SettingsUsage.RuntimeProject )
                 _instance = Resources.Load<T>( filename );

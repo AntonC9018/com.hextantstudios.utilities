@@ -19,46 +19,67 @@ namespace Hextant
     //   the current project folder so that shallow cloning (symbolic links to
     //   the Assets/ folder) can be used when testing multiplayer games.
     // See: https://HextantStudios.com/unity-custom-settings/
+
+    // This whole thing might fuck up if some methods are called before init
+
+
+
     public abstract class Settings<T> : ScriptableObject where T : Settings<T>
     {
         // The singleton instance. (Not thread safe but fine for ScriptableObjects.)
         public static T instance => _instance != null ? _instance : Initialize();
         static T _instance;
+        static bool _isDirty = false;
+        static string filename;
+        static string path;
+
+        protected static void InitFilenamePath()
+        {
+            filename = attribute.filename ?? typeof( T ).Name;
+            path = GetSettingsPath() + filename
+                 + (attribute.usage == SettingsUsage.RuntimeUser ? ".json" : ".asset");
+        }
 
         // Loads or creates the settings instance and stores it in _instance.
         protected static T Initialize()
         {
-            // If the instance is already valid, return it. Needed if called from a 
+            // If the instance is already valid, return it. Needed if called from a
             // derived class that wishes to ensure the settings are initialized.
-            if( _instance != null ) return _instance;
+            if ( _instance != null ) return _instance;
 
             // Verify there was a [Settings] attribute.
-            if( attribute == null )
+            if ( attribute == null )
                 throw new System.InvalidOperationException(
                     "[Settings] attribute missing for type: " + typeof( T ).Name );
 
             // Attempt to load the settings asset.
-            var filename = attribute.filename ?? typeof( T ).Name;
-            var path = GetSettingsPath() + filename + ".asset";
+            InitFilenamePath();
 
-            if( attribute.usage == SettingsUsage.RuntimeProject )
+            if ( attribute.usage == SettingsUsage.RuntimeUser )
+            {
+                // first load the default setting, then overwrite it
+                _instance = Resources.Load<T>( filename );
+                if (!TryLoadSettings())
+                    SaveSettings( ignoreDirtyFlag: true );
+            }
+            else if ( attribute.usage == SettingsUsage.RuntimeProject )
                 _instance = Resources.Load<T>( filename );
 #if UNITY_EDITOR
             else
                 _instance = AssetDatabase.LoadAssetAtPath<T>( path );
 
             // Return the instance if it was the load was successful.
-            if( _instance != null ) return _instance;
+            if ( _instance != null ) return _instance;
 
             // Move settings if its path changed (type renamed or attribute changed)
             // while the editor was running. This must be done manually if the
             // change was made outside the editor.
             var instances = Resources.FindObjectsOfTypeAll<T>();
-            if( instances.Length > 0 )
+            if ( instances.Length > 0 )
             {
                 var oldPath = AssetDatabase.GetAssetPath( instances[ 0 ] );
                 var result = AssetDatabase.MoveAsset( oldPath, path );
-                if( string.IsNullOrEmpty( result ) )
+                if ( string.IsNullOrEmpty( result ) )
                     return _instance = instances[ 0 ];
                 else
                     Debug.LogWarning( $"Failed to move previous settings asset " +
@@ -67,13 +88,13 @@ namespace Hextant
             }
 #endif
             // Create the settings instance if it was not loaded or found.
-            if( _instance != null ) return _instance;
+            if ( _instance != null ) return _instance;
             _instance = CreateInstance<T>();
 
 #if UNITY_EDITOR
             // Verify the derived class is in a file with the same name.
             var script = MonoScript.FromScriptableObject( _instance );
-            if( script == null || script.name != typeof( T ).Name )
+            if ( script == null || script.name != typeof( T ).Name )
             {
                 DestroyImmediate( _instance );
                 _instance = null;
@@ -95,12 +116,16 @@ namespace Hextant
         }
 
         // Returns the full asset path to the settings file.
-        static string GetSettingsPath()
+        public static string GetSettingsPath()
         {
             var path = "Assets/Settings/";
 
             switch( attribute.usage )
             {
+                case SettingsUsage.RuntimeUser:
+                    path = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments ) + '\\'
+                         + GetProjectFolderName() + '\\';
+                    break;
                 case SettingsUsage.RuntimeProject:
                     path += "Resources/"; break;
 #if UNITY_EDITOR
@@ -123,19 +148,24 @@ namespace Hextant
         // Called to validate settings changes.
         protected virtual void OnValidate() { }
 
-#if UNITY_EDITOR
         // Sets the specified setting to the desired value and marks the settings
         // so that it will be saved.
         protected void Set<S>( ref S setting, S value )
         {
-            if( EqualityComparer<S>.Default.Equals( setting, value ) ) return;
+            if ( EqualityComparer<S>.Default.Equals( setting, value ) ) return;
             setting = value;
             OnValidate();
             SetDirty();
         }
 
         // Marks the settings dirty so that it will be saved.
-        protected new void SetDirty() => EditorUtility.SetDirty( this );
+        protected new void SetDirty()
+        {
+#if UNITY_EDITOR
+            EditorUtility.SetDirty( this );
+#endif
+            _isDirty = true;
+        }
 
         // The directory name of the current project folder.
         static string GetProjectFolderName()
@@ -143,7 +173,52 @@ namespace Hextant
             var path = Application.dataPath.Split( '/' );
             return path[ path.Length - 2 ];
         }
-#endif
+
+        /// <summary>
+        /// Saves the current setting to disk, only for RuntimeUser. Skips it if the setting is not dirty (not set recently)
+        /// </summary>
+        /// <param name="ignoreDirtyFlag">Set this true to ignore the dirty flag check</param>
+        public static void SaveSettings(bool ignoreDirtyFlag = false)
+        {
+            Debug.Assert( attribute.usage == SettingsUsage.RuntimeUser );
+
+            if ( !ignoreDirtyFlag && !_isDirty )
+                return;
+
+            if ( !Directory.Exists( GetSettingsPath() ) )
+                Directory.CreateDirectory( GetSettingsPath() );
+
+            File.WriteAllText( path, JsonUtility.ToJson( _instance, true ) );
+            _isDirty = false;
+        }
+
+        /// <summary>
+        /// Load the current setting from disk, only for RuntimeUser
+        /// </summary>
+        /// <returns>True if load goes successfully, false if errors are present</returns>
+        public static bool TryLoadSettings()
+        {
+            Debug.Assert( attribute.usage == SettingsUsage.RuntimeUser );
+
+            if( !File.Exists( path ) )
+            {
+                Debug.Log( "File " + path + " does not exist" );
+                return false;
+            }
+
+            try
+            {
+                JsonUtility.FromJsonOverwrite( File.ReadAllText( path ), _instance );
+            }
+            catch( Exception e )
+            {
+                Debug.LogWarning( e );
+                return false;
+            }
+
+            return true;
+        }
+
 
         // Base class for settings contained by a Settings<T> instance.
         [Serializable]
@@ -157,7 +232,7 @@ namespace Hextant
             // instance so that it will be saved.
             protected void Set<S>( ref S setting, S value )
             {
-                if( EqualityComparer<S>.Default.Equals( setting, value ) ) return;
+                if ( EqualityComparer<S>.Default.Equals( setting, value ) ) return;
                 setting = value;
                 OnValidate();
                 instance.SetDirty();

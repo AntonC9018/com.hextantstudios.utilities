@@ -19,54 +19,67 @@ namespace Hextant
     //   the current project folder so that shallow cloning (symbolic links to
     //   the Assets/ folder) can be used when testing multiplayer games.
     // See: https://HextantStudios.com/unity-custom-settings/
+
+    // This whole thing might fuck up if some methods are called before init
+
+
+
     public abstract class Settings<T> : ScriptableObject where T : Settings<T>
     {
         // The singleton instance. (Not thread safe but fine for ScriptableObjects.)
         public static T instance => _instance != null ? _instance : Initialize();
         static T _instance;
         static bool _isDirty = false;
+        static string filename;
+        static string path;
+
+        protected static void InitFilenamePath()
+        {
+            filename = attribute.filename ?? typeof( T ).Name;
+            path = GetSettingsPath() + filename
+                 + (attribute.usage == SettingsUsage.RuntimeUser ? ".json" : ".asset");
+        }
 
         // Loads or creates the settings instance and stores it in _instance.
         protected static T Initialize()
         {
             // If the instance is already valid, return it. Needed if called from a
             // derived class that wishes to ensure the settings are initialized.
-            if( _instance != null ) return _instance;
+            if ( _instance != null ) return _instance;
 
             // Verify there was a [Settings] attribute.
-            if( attribute == null )
+            if ( attribute == null )
                 throw new System.InvalidOperationException(
                     "[Settings] attribute missing for type: " + typeof( T ).Name );
 
             // Attempt to load the settings asset.
-            var filename = attribute.filename ?? typeof( T ).Name;
-            var path = GetSettingsPath() + filename + ".asset";
+            InitFilenamePath();
 
-            if( attribute.usage == SettingsUsage.RuntimeUser )
+            if ( attribute.usage == SettingsUsage.RuntimeUser )
             {
                 // first load the default setting, then overwrite it
                 _instance = Resources.Load<T>( filename );
-                if (!LoadSettings())
-                    SaveSettings( true );
+                if (!TryLoadSettings())
+                    SaveSettings( ignoreDirtyFlag: true );
             }
-            else if( attribute.usage == SettingsUsage.RuntimeProject )
+            else if ( attribute.usage == SettingsUsage.RuntimeProject )
                 _instance = Resources.Load<T>( filename );
 #if UNITY_EDITOR
             else
                 _instance = AssetDatabase.LoadAssetAtPath<T>( path );
 
             // Return the instance if it was the load was successful.
-            if( _instance != null ) return _instance;
+            if ( _instance != null ) return _instance;
 
             // Move settings if its path changed (type renamed or attribute changed)
             // while the editor was running. This must be done manually if the
             // change was made outside the editor.
             var instances = Resources.FindObjectsOfTypeAll<T>();
-            if( instances.Length > 0 )
+            if ( instances.Length > 0 )
             {
                 var oldPath = AssetDatabase.GetAssetPath( instances[ 0 ] );
                 var result = AssetDatabase.MoveAsset( oldPath, path );
-                if( string.IsNullOrEmpty( result ) )
+                if ( string.IsNullOrEmpty( result ) )
                     return _instance = instances[ 0 ];
                 else
                     Debug.LogWarning( $"Failed to move previous settings asset " +
@@ -75,13 +88,13 @@ namespace Hextant
             }
 #endif
             // Create the settings instance if it was not loaded or found.
-            if( _instance != null ) return _instance;
+            if ( _instance != null ) return _instance;
             _instance = CreateInstance<T>();
 
 #if UNITY_EDITOR
             // Verify the derived class is in a file with the same name.
             var script = MonoScript.FromScriptableObject( _instance );
-            if( script == null || script.name != typeof( T ).Name )
+            if ( script == null || script.name != typeof( T ).Name )
             {
                 DestroyImmediate( _instance );
                 _instance = null;
@@ -139,7 +152,7 @@ namespace Hextant
         // so that it will be saved.
         protected void Set<S>( ref S setting, S value )
         {
-            if( EqualityComparer<S>.Default.Equals( setting, value ) ) return;
+            if ( EqualityComparer<S>.Default.Equals( setting, value ) ) return;
             setting = value;
             OnValidate();
             SetDirty();
@@ -167,23 +180,15 @@ namespace Hextant
         /// <param name="ignoreDirtyFlag">Set this true to ignore the dirty flag check</param>
         public static void SaveSettings(bool ignoreDirtyFlag = false)
         {
-            if( attribute.usage != SettingsUsage.RuntimeUser )
-            {
-                Debug.LogWarning( "Save method is only used with RuntimeUser settings" );
-                return;
-            }
+            Debug.Assert( attribute.usage == SettingsUsage.RuntimeUser );
 
-            if( !ignoreDirtyFlag && !_isDirty )
-            {
-                Debug.Log( "Settings are clean, no save needed" );
+            if ( !ignoreDirtyFlag && !_isDirty )
                 return;
-            }
 
-            if( !Directory.Exists( GetSettingsPath() ) )
+            if ( !Directory.Exists( GetSettingsPath() ) )
                 Directory.CreateDirectory( GetSettingsPath() );
 
-            var filepath = GetSettingsPath() + ( attribute.filename ?? typeof(T).Name ) + ".json";
-            File.WriteAllText( filepath, JsonUtility.ToJson( _instance, true ) );
+            File.WriteAllText( path, JsonUtility.ToJson( _instance, true ) );
             _isDirty = false;
         }
 
@@ -191,18 +196,19 @@ namespace Hextant
         /// Load the current setting from disk, only for RuntimeUser
         /// </summary>
         /// <returns>True if load goes successfully, false if errors are present</returns>
-        public static bool LoadSettings()
+        public static bool TryLoadSettings()
         {
-            if( attribute.usage != SettingsUsage.RuntimeUser )
+            Debug.Assert( attribute.usage == SettingsUsage.RuntimeUser );
+
+            if( !File.Exists( path ) )
             {
-                Debug.LogWarning( "Load method is only used with RuntimeUser settings" );
+                Debug.Log( "File " + path + " does not exist" );
                 return false;
             }
 
             try
             {
-                var filepath = GetSettingsPath() + ( attribute.filename ?? typeof(T).Name ) + ".json";
-                JsonUtility.FromJsonOverwrite( File.ReadAllText( filepath ), _instance );
+                JsonUtility.FromJsonOverwrite( File.ReadAllText( path ), _instance );
             }
             catch( Exception e )
             {
@@ -210,9 +216,9 @@ namespace Hextant
                 return false;
             }
 
-            Debug.Log( "Successfully loaded file from disk" );
             return true;
         }
+
 
         // Base class for settings contained by a Settings<T> instance.
         [Serializable]
@@ -226,7 +232,7 @@ namespace Hextant
             // instance so that it will be saved.
             protected void Set<S>( ref S setting, S value )
             {
-                if( EqualityComparer<S>.Default.Equals( setting, value ) ) return;
+                if ( EqualityComparer<S>.Default.Equals( setting, value ) ) return;
                 setting = value;
                 OnValidate();
                 instance.SetDirty();

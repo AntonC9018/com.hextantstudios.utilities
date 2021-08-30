@@ -6,6 +6,7 @@ using System.IO;
 using System.Reflection;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Assertions;
 
 namespace Hextant
 {
@@ -31,13 +32,17 @@ namespace Hextant
         static T _instance;
         static bool _isDirty = false;
         static string filename;
-        static string path;
+        //static string path;
+        static string projectpath;
+        static string documentspath;
 
         protected static void InitFilenamePath()
         {
             filename = attribute.filename ?? typeof( T ).Name;
-            path = GetSettingsPath() + filename
-                 + (attribute.usage == SettingsUsage.RuntimeUser ? ".json" : ".asset");
+            projectpath = GetProjectSettingsPath() + filename + ".asset";
+
+            if (attribute.usage == SettingsUsage.RuntimeUser)
+                documentspath = GetDocumentsSettingsPath() + filename + ".json";
         }
 
         // Loads or creates the settings instance and stores it in _instance.
@@ -58,7 +63,7 @@ namespace Hextant
             if ( attribute.usage == SettingsUsage.RuntimeUser )
             {
                 // first load the default setting, then overwrite it
-                _instance = Resources.Load<T>( filename );
+                _instance = AssetDatabase.LoadAssetAtPath<T>( projectpath );
 
                 // if you're running this in editor, then ignore the disk settings
                 // this will make it easier to modify stuff in editor (without manually resetting the saved setting)
@@ -71,7 +76,7 @@ namespace Hextant
                 _instance = Resources.Load<T>( filename );
 #if UNITY_EDITOR
             else
-                _instance = AssetDatabase.LoadAssetAtPath<T>( path );
+                _instance = AssetDatabase.LoadAssetAtPath<T>( projectpath );
 
             // Return the instance if it was the load was successful.
             if ( _instance != null ) return _instance;
@@ -83,12 +88,12 @@ namespace Hextant
             if ( instances.Length > 0 )
             {
                 var oldPath = AssetDatabase.GetAssetPath( instances[ 0 ] );
-                var result = AssetDatabase.MoveAsset( oldPath, path );
+                var result = AssetDatabase.MoveAsset( oldPath, projectpath );
                 if ( string.IsNullOrEmpty( result ) )
                     return _instance = instances[ 0 ];
                 else
                     Debug.LogWarning( $"Failed to move previous settings asset " +
-                        $"'{oldPath}' to '{path}'. " +
+                        $"'{oldPath}' to '{projectpath}'. " +
                         $"A new settings asset will be created.", _instance );
             }
 #endif
@@ -112,25 +117,23 @@ namespace Hextant
             // Create the directory as Unity does not do this itself.
             Directory.CreateDirectory( Path.Combine(
                 Directory.GetCurrentDirectory(),
-                Path.GetDirectoryName( path ) ) );
+                Path.GetDirectoryName( projectpath ) ) );
 
             // Create the asset only in the editor.
-            AssetDatabase.CreateAsset( _instance, path );
+            AssetDatabase.CreateAsset( _instance, projectpath );
 #endif
             return _instance;
         }
 
         // Returns the full asset path to the settings file.
-        public static string GetSettingsPath()
+        public static string GetProjectSettingsPath()
         {
             var path = "Assets/Settings/";
 
             switch( attribute.usage )
             {
                 case SettingsUsage.RuntimeUser:
-                    path = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments ) + '\\'
-                         + GetProjectFolderName() + '\\';
-                    break;
+                    path += "Resources/User/" + GetProjectFolderName() + '/'; break;
                 case SettingsUsage.RuntimeProject:
                     path += "Resources/"; break;
 #if UNITY_EDITOR
@@ -142,6 +145,14 @@ namespace Hextant
                 default: throw new System.InvalidOperationException();
             }
             return path;
+        }
+
+        public static string GetDocumentsSettingsPath()
+        {
+            Debug.Assert( attribute.usage == SettingsUsage.RuntimeUser );
+
+            return Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments ) + '\\'
+                + GetProjectFolderName() + '\\';
         }
 
         // The derived type's [Settings] attribute.
@@ -190,10 +201,10 @@ namespace Hextant
             if ( !ignoreDirtyFlag && !_isDirty )
                 return;
 
-            if ( !Directory.Exists( GetSettingsPath() ) )
-                Directory.CreateDirectory( GetSettingsPath() );
+            if ( !Directory.Exists( GetDocumentsSettingsPath() ) )
+                Directory.CreateDirectory( GetDocumentsSettingsPath() );
 
-            File.WriteAllText( path, JsonUtility.ToJson( _instance, true ) );
+            File.WriteAllText( documentspath, JsonUtility.ToJson( _instance, true ) );
             _isDirty = false;
         }
 
@@ -205,15 +216,15 @@ namespace Hextant
         {
             Debug.Assert( attribute.usage == SettingsUsage.RuntimeUser );
 
-            if( !File.Exists( path ) )
+            if( !File.Exists( documentspath ) )
             {
-                Debug.Log( "File " + path + " does not exist" );
+                Debug.Log( "File " + documentspath + " does not exist" );
                 return false;
             }
 
             try
             {
-                JsonUtility.FromJsonOverwrite( File.ReadAllText( path ), _instance );
+                JsonUtility.FromJsonOverwrite( File.ReadAllText( documentspath ), _instance );
             }
             catch( Exception e )
             {

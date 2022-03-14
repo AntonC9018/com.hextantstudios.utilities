@@ -6,7 +6,6 @@ using System.IO;
 using System.Reflection;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.Assertions;
 
 namespace Hextant
 {
@@ -35,11 +34,13 @@ namespace Hextant
         //static string path;
         static string projectpath;
         static string documentspath;
+        static string resourcepath;
 
         protected static void InitFilenamePath()
         {
             filename = attribute.filename ?? typeof( T ).Name;
             projectpath = GetProjectSettingsPath() + filename + ".asset";
+            resourcepath = GetResourcePath() + filename;
 
             if (attribute.usage == SettingsUsage.RuntimeUser)
                 documentspath = GetDocumentsSettingsPath() + filename + ".json";
@@ -60,23 +61,15 @@ namespace Hextant
             // Attempt to load the settings asset.
             InitFilenamePath();
 
-            if ( attribute.usage == SettingsUsage.RuntimeUser )
-            {
-                // first load the default setting, then overwrite it
-                _instance = AssetDatabase.LoadAssetAtPath<T>( projectpath );
+            _instance = Resources.Load<T>( resourcepath );
 
-                // if you're running this in editor, then ignore the disk settings
-                // this will make it easier to modify stuff in editor (without manually resetting the saved setting)
 #if !UNITY_EDITOR
-                if (!TryLoadSettings())
-                    SaveSettings( ignoreDirtyFlag: true );
+            if ( attribute.usage == SettingsUsage.RuntimeUser && !TryLoadSettings())
+                SaveSettings( ignoreDirtyFlag: true );
 #endif
-            }
-            else if ( attribute.usage == SettingsUsage.RuntimeProject )
-                _instance = Resources.Load<T>( filename );
+
 #if UNITY_EDITOR
-            else
-                _instance = AssetDatabase.LoadAssetAtPath<T>( projectpath );
+
 
             // Return the instance if it was the load was successful.
             if ( _instance != null ) return _instance;
@@ -92,9 +85,11 @@ namespace Hextant
                 if ( string.IsNullOrEmpty( result ) )
                     return _instance = instances[ 0 ];
                 else
-                    Debug.LogWarning( $"Failed to move previous settings asset " +
-                        $"'{oldPath}' to '{projectpath}'. " +
-                        $"A new settings asset will be created.", _instance );
+                {
+                    Debug.LogWarning( $"'{result}'. Failed to move previous settings asset " +
+                                      $"'{oldPath}' to '{projectpath}'. " +
+                                      $"A new settings asset will be created.", _instance );
+                }
             }
 #endif
             // Create the settings instance if it was not loaded or found.
@@ -128,23 +123,29 @@ namespace Hextant
         // Returns the full asset path to the settings file.
         public static string GetProjectSettingsPath()
         {
-            var path = "Assets/Settings/";
+            return "Assets/Resources/" + GetResourcePath();
+        }
+
+        public static string GetResourcePath()
+        {
+            var path = "Settings/";
 
             switch( attribute.usage )
             {
                 case SettingsUsage.RuntimeUser:
-                    path += "Resources/User/" + GetProjectFolderName() + '/'; break;
+                    path += "RuntimeUser/"; break;
                 case SettingsUsage.RuntimeProject:
-                    path += "Resources/"; break;
+                    path += "RuntimeProject/"; break;
 #if UNITY_EDITOR
                 case SettingsUsage.EditorProject:
-                    path += "Editor/"; break;
+                    path += "EditorProject/"; break;
                 case SettingsUsage.EditorUser:
-                    path += "Editor/User/" + GetProjectFolderName() + '/'; break;
+                    path += "EditorUser/"; break;
 #endif
                 default: throw new System.InvalidOperationException();
             }
             return path;
+
         }
 
         public static string GetDocumentsSettingsPath()
